@@ -17,18 +17,9 @@ config_map = {
     # Add more mappings as needed
 }
 
-# Regular expression to find the estimated print time
-black_time_regex = re.compile(
-    r"; estimated printing time \(silent mode\) = (\d+h \d+m \d+s)"
+time_regex = re.compile(
+    r"; estimated printing time \(.*\) = (?:(\d+)d\s)?(?:(\d+)h\s)?(?:(\d+)m\s)?(?:(\d+)s)?"
 )
-orange_time_regex = re.compile(
-    r"; estimated printing time \(normal mode\) = (\d+h \d+m \d+s)"
-)
-
-subdir_map = {
-    "Black": black_time_regex,
-    "Orange": orange_time_regex,
-}
 
 
 # Function to process STL files in a subdirectory
@@ -60,30 +51,27 @@ def process_stl_files(subdir, config_file):
 
             # Extract print time from G-code
             with open(gcode_file_path, "r") as gcode_file:
+                print_time_found = False
+
                 for line in gcode_file:
-                    time_regex = subdir_map[subdir]
-
-                    if not time_regex:
-                        print(f"Time regex not found for {subdir}")
-                        break
-
                     match = time_regex.search(line)
-
                     if match:
-                        print_times.append((stl_file, match.group(1)))
+                        days, hours, minutes, seconds = [
+                            int(t) if t else 0 for t in match.groups()
+                        ]
+                        total_seconds = (
+                            seconds + (minutes * 60) + (hours * 3600) + (days * 86400)
+                        )
+
+                        print_times.append((stl_file, total_seconds))
+                        print_time_found = True
                         break
+
+                if not print_time_found:
+                    raise Exception(f"Print time not found for {stl_file}")
 
             # Remove G-code file
             # os.remove(gcode_file_path)
-
-    # parse print times by STL file and turn string of `h m s` into seconds
-    print_times = [
-        (
-            stl_file,
-            int(reduce(lambda x, y: x * 60 + y, map(int, re.findall(r"\d+", time)))),
-        )
-        for stl_file, time in print_times
-    ]
 
     return print_times
 
@@ -115,9 +103,7 @@ for current_subdir, config in config_map.items():
         if current_subdir != subdir:
             continue
 
-        print(
-            "{:<30} {:<20} {:<10}".format("STL File", "Color", "Estimated Print Time")
-        )
+        print("{:<35} {:<10} {:<20}".format("STL File", "Color", "Print Time"))
         print("-" * 80)
         for stl_file, time in print_times:
             days = time // (24 * 3600)
@@ -126,7 +112,7 @@ for current_subdir, config in config_map.items():
             time %= 3600
             minutes = time // 60
             print(
-                "{:<30} {:<20} {:02d} days {:02d} hours {:02d} minutes".format(
+                "{:<35} {:<10} {:02d} days {:02d} hours {:02d} minutes".format(
                     stl_file, subdir, days, hours, minutes
                 )
             )
@@ -172,6 +158,8 @@ for subdir in subdirectories:
 # Printer build plate sizes (length, width) in mm
 build_plate_sizes = {"Black": (250, 210), "Orange": (180, 180)}
 
+prev_color = None
+
 # Add each rectangle (length, width) to the packer
 for subdir, dimensions in stl_dimensions.items():
     # Create a new packer
@@ -187,8 +175,48 @@ for subdir, dimensions in stl_dimensions.items():
 
     # Print the resulting bins
     for i, rect in enumerate(packer):
-        print(f"Bin {i + 1}: {rect.width}x{rect.height}")
+        print(f"Batch {i + 1} for {subdir}")
+        # print(f"Bin {i + 1}: {rect.width}x{rect.height}")
+        curr_color = rect.bid
 
-        for stl_file in [list(l)[::-1] for l in rect.rect_list()]:
-            print(f"  {stl_file}")
-        print()
+        if prev_color != curr_color:
+            prev_color = curr_color
+
+            print("{:<35} {:<20}".format("STL File", "Print Time"))
+            print("-" * 80)
+
+        batch_print_time = 0
+
+        for stl_file, _, _, _, _ in [list(l)[::-1] for l in rect.rect_list()]:
+            print_time_list = [
+                time for _, file, time in all_print_times if file == stl_file
+            ]
+
+            if not print_time_list:
+                raise Exception(f"Print time not found for {stl_file}")
+
+            print_time = print_time_list[0]
+            batch_print_time += print_time
+
+            print_days = print_time // (24 * 3600)
+            print_hours = print_time // 3600
+            print_minutes = (print_time % 3600) // 60
+
+            print(
+                "{:<35} {:02d} days {:02d} hours {:02d} minutes".format(
+                    stl_file, print_days, print_hours, print_minutes
+                )
+            )
+
+        total_days = batch_print_time // (24 * 3600)
+        total_hours = batch_print_time // 3600
+        total_minutes = (batch_print_time % 3600) // 60
+
+        print("\n")
+        print(
+            "Total print time: {:02d} days {:02d} hours {:02d} minutes".format(
+                total_days, total_hours, total_minutes
+            )
+        )
+        print("-" * 80)
+        print("\n")
