@@ -1,0 +1,5 @@
+.DS_Store
+venv
+# keep stl directory ignore all files inside
+stl/*
+!stl/.gitkeep
